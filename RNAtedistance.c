@@ -214,7 +214,7 @@ TreeInfo* compute_tree_info(Node* root) {
         exit(1);
     }
     ti->root = root;
-    int max_nodes = 1000;
+    int max_nodes = 1000; // Adjust based on input size
     ti->postorder = malloc(sizeof(Node*) * max_nodes);
     if (!ti->postorder) {
         fprintf(stderr, "Memory allocation failed for postorder\n");
@@ -284,13 +284,13 @@ void forest_dist(int i, int j, TreeInfo* t1, TreeInfo* t2, int** treedist) {
     int base_d2 = j - l2 + 2;
     int** fd = malloc(sizeof(int*) * base_d1);
     if (!fd) {
-        fprintf(stderr, "Memory allocation failed for fd\n");
+        fprintf(stderr, "Memory allocation failed for forest distance array\n");
         exit(1);
     }
     for (int di = 0; di < base_d1; di++) {
         fd[di] = malloc(sizeof(int) * base_d2);
         if (!fd[di]) {
-            fprintf(stderr, "Memory allocation failed for fd row\n");
+            fprintf(stderr, "Memory allocation failed for forest distance row\n");
             exit(1);
         }
         for (int dj = 0; dj < base_d2; dj++) {
@@ -351,13 +351,13 @@ int tree_edit_dist(TreeInfo* t1, TreeInfo* t2) {
     int n = t2->postorder_size;
     int** treedist = malloc(sizeof(int*) * m);
     if (!treedist) {
-        fprintf(stderr, "Memory allocation failed for treedist\n");
+        fprintf(stderr, "Memory allocation failed for tree edit distance matrix\n");
         exit(1);
     }
     for (int i = 0; i < m; i++) {
         treedist[i] = malloc(sizeof(int) * n);
         if (!treedist[i]) {
-            fprintf(stderr, "Memory allocation failed for treedist row\n");
+            fprintf(stderr, "Memory allocation failed for tree edit distance row\n");
             exit(1);
         }
         for (int j = 0; j < n; j++) {
@@ -377,27 +377,30 @@ int main(int argc, char* argv[]) {
     int opt;
     int num_threads = omp_get_max_threads();
     int row_wise = 0;  // Default to full matrix mode
+    int first_only = 0; // New option to compare only the first structure
 
     struct option long_options[] = {
         {"help", no_argument, 0, 'h'},
         {"version", no_argument, 0, 'v'},
         {"threads", required_argument, 0, 't'},
         {"row-wise", no_argument, 0, 'r'},
+        {"first-only", no_argument, 0, 'f'}, // New option
         {0, 0, 0, 0}
     };
 
-    while ((opt = getopt_long(argc, argv, "hvt:r", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hvt:rf", long_options, NULL)) != -1) {
         switch (opt) {
             case 'h':
                 printf("Usage: %s [options]\n", argv[0]);
                 printf("Options:\n");
-                printf("  --help, -h     Display this help message\n");
-                printf("  --version, -v  Display version information\n");
-                printf("  --threads, -t  Set number of threads (default: %d)\n", num_threads);
-                printf("  --row-wise, -r Output the distance matrix row by row (memory-efficient)\n");
+                printf("  --help, -h         Display this help message\n");
+                printf("  --version, -v      Display version information\n");
+                printf("  --threads, -t      Set number of threads (default: %d)\n", num_threads);
+                printf("  --row-wise, -r     Output the distance matrix row by row (memory-efficient)\n");
+                printf("  --first-only, -f   Compute distances only for the first structure against all others\n");
                 printf("\nThe program reads RNA secondary structures in dot-bracket notation\n");
-                printf("from standard input, one per line, and outputs a distance matrix\n");
-                printf("based on tree edit distance.\n");
+                printf("from standard input, one per line, and outputs either a distance matrix\n");
+                printf("or distances for the first structure based on tree edit distance.\n");
                 return 0;
             case 'v':
                 printf("Version: %s\n", VERSION);
@@ -411,6 +414,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 'r':
                 row_wise = 1;
+                break;
+            case 'f':
+                first_only = 1;
                 break;
             default:
                 fprintf(stderr, "Invalid option. Use --help for usage information.\n");
@@ -478,11 +484,52 @@ int main(int argc, char* argv[]) {
         ti_array[i] = compute_tree_info(trees[i]);
     }
 
-    _Atomic int completed_rows = 0;
-    int last_percentage = -1;
+    if (first_only) {
+        // Compute distances only for the first structure against all others
+        if (num_structures < 2) {
+            fprintf(stderr, "At least two structures are required for comparison.\n");
+            for (int i = 0; i < num_structures; i++) {
+                free(structures[i]);
+                free_node(trees[i]);
+                free_tree_info(ti_array[i]);
+            }
+            free(structures);
+            free(trees);
+            free(ti_array);
+            return 1;
+        }
 
-    if (row_wise) {
+        int* distances = malloc((num_structures - 1) * sizeof(int));
+        if (!distances) {
+            fprintf(stderr, "Memory allocation failed for distances array\n");
+            for (int i = 0; i < num_structures; i++) {
+                free(structures[i]);
+                free_node(trees[i]);
+                free_tree_info(ti_array[i]);
+            }
+            free(structures);
+            free(trees);
+            free(ti_array);
+            return 1;
+        }
+
+        #pragma omp parallel for schedule(dynamic)
+        for (int j = 1; j < num_structures; j++) {
+            int ted = tree_edit_dist(ti_array[0], ti_array[j]);
+            distances[j - 1] = ted;
+        }
+
+        // Output distances one below the other
+        for (int j = 0; j < num_structures - 1; j++) {
+            printf("%d\n", distances[j]);
+        }
+
+        free(distances);
+    } else if (row_wise) {
         // Row-wise computation and output
+        _Atomic int completed_rows = 0;
+        int last_percentage = -1;
+
         #pragma omp parallel for schedule(dynamic)
         for (int i = 0; i < num_structures; i++) {
             int* row = malloc(num_structures * sizeof(int));
@@ -517,8 +564,12 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+        fprintf(stderr, "\n");
     } else {
         // Full matrix computation
+        _Atomic int completed_rows = 0;
+        int last_percentage = -1;
+
         int* distance_matrix = malloc(num_structures * num_structures * sizeof(int));
         if (!distance_matrix) {
             fprintf(stderr, "Memory allocation failed for distance matrix\n");
@@ -554,10 +605,11 @@ int main(int argc, char* argv[]) {
             }
             printf("\n");
         }
+        fprintf(stderr, "\n");
         free(distance_matrix);
     }
-    fprintf(stderr, "\n");
 
+    // Clean up memory
     for (int i = 0; i < num_structures; i++) {
         free(structures[i]);
         free_node(trees[i]);
