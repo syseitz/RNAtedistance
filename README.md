@@ -4,7 +4,7 @@ This programme calculates the tree edit distance between RNA secondary structure
 
 ## Motivation of this program
 
-During my Master Thesis I experienced RNAdistance to be very slow and not solve my problems in reasonable time. Therefore I have implemented my own version to calculate the Tree Edit Distance, to make 
+During my master's thesis, I found RNAdistance to be painfully slow, like watching paint dry, but less exciting. It just couldn’t keep up with the demands of my research, so I decided to take matters into my own hands. That’s how RNAtedistance was born. It’s faster, more efficient, and gets the job done without making you want to pull your hair out. Now you can calculate Tree Edit Distances without needing a nap in between!
 
 ## Compilation Instructions
 
